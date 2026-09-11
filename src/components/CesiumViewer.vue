@@ -7,87 +7,96 @@ import * as Cesium from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
 let viewer;
 let handler;
-// //折线
-// let polylinePositions = [];
-// let polylineEntity = null;
+
 //面
-let polygonPositions = [];
-let polygonEntity = null;
+let currentPositions = [];
+let currentPolygon = null;
+let mousePosition = null;
+
+//预览线
+let previewLineEntity = null;
+
 onMounted(() => {
   viewer = new Cesium.Viewer("cesiumContainer");
   const camera = viewer.camera;
-  camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(116.39, 39.9, 10000.0),
-    duration: 2, //飞行时间，单位为秒
-
-    //方向角
-    orientation: {
-      heading: Cesium.Math.toRadians(0.0), // 方向角，单位为弧度
-      pitch: Cesium.Math.toRadians(-90.0), // 俯仰角，单位为弧度
-      roll: 0.0, // 翻滚角，单位为弧度
-    },
+  camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(116.397428, 39.90923, 10000.0),
   });
 
   //鼠标事件
   handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  //监听鼠标左键点击事件
+
+  //左键添加点
   handler.setInputAction((click) => {
-    const cartesian = viewer.camera.pickEllipsoid(
-      click.position,
-      viewer.scene.globe.ellipsoid,
-    );
-    // //保存
-    // polylinePositions.push(cartesian);
-    // // 至少两个点才能形成线
-    // if (polylinePositions.length < 2) {
-    //   return;
-    // }
-    // // 如果已经存在折线实体，先移除它
-    // if (polylineEntity) {
-    //   viewer.entities.remove(polylineEntity);
-    // }
-    // // 创建新的折线实体
-    // polylineEntity = viewer.entities.add({
-    //   polyline: {
-    //     positions: polylinePositions,
-    //     width: 5,
-    //     material: Cesium.Color.RED,
-    //   },
-    // });
+    const ray = viewer.camera.getPickRay(click.position);
+    const cartesian = viewer.scene.globe.pick(ray, viewer.scene);
+    if (!cartesian) return;
+    currentPositions.push(cartesian); // 添加当前点
 
-    if (!cartesian) {
-      return;
-    }
+    // 创建预览线
+    previewLineEntity = viewer.entities.add({
+      polyline: {
+        positions: new Cesium.CallbackProperty(() => {
+          const tempPositions = [...currentPositions];
+          if (mousePosition) {
+            tempPositions.push(mousePosition);
+          }
+          return tempPositions;
+        }, false),
+        width: 2,
+        material: Cesium.Color.RED,
+      },
+    });
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-    //保存
-    polygonPositions.push(cartesian);
-    if (polygonPositions.length < 3) {
-      return;
-    }
-    // // 如果已经存在面实体，先移除它
-    // if (polygonEntity) {
-    //   viewer.entities.remove(polygonEntity);
-    // }
-    // 创建新的面实体
-    if (!polygonEntity) {
-      polygonEntity = viewer.entities.add({
-        name:'动态绘制面',
+  // 鼠标移动：更新临时点
+  handler.setInputAction((movement) => {
+    const ray = viewer.camera.getPickRay(movement.endPosition);
+    const cartesian = viewer.scene.globe.pick(ray, viewer.scene);
+    if (!cartesian) return;
+    mousePosition = cartesian; // 更新鼠标当前位置
+
+    if (currentPositions.length < 2) return;
+    if (currentPolygon) viewer.entities.remove(currentPolygon);
+    
+    currentPolygon = viewer.entities.add({
+      polygon: {
+        //使用CallbackProperty动态更新多边形的顶点
+        //这样就可以在鼠标移动时实时更新多边形的形状
+        hierarchy: new Cesium.CallbackProperty(() => {
+          const tempPositions = [...currentPositions];
+          if (mousePosition) {
+            tempPositions.push(mousePosition);
+          }
+          return new Cesium.PolygonHierarchy(tempPositions);
+        }, false),
+        material: Cesium.Color.YELLOW.withAlpha(0.3),
+      },
+    });
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+  //右键结束绘制
+  handler.setInputAction((click) => {
+    if (currentPositions.length >= 3) {
+      //把临时预览实体转为永久实体
+      viewer.entities.add({
         polygon: {
-          //动态获取hierarchy
-          //Entity本身没有重新创建
-          //false表示：这个 Property 的值是不是永远不变？
-          hierarchy: new Cesium.CallbackProperty(() => {
-            return new Cesium.PolygonHierarchy([...polygonPositions]);
-          }, false),
-          material: Cesium.Color.BLUE.withAlpha(0.5),
+          hierarchy: new Cesium.PolygonHierarchy(currentPositions),
+          material: Cesium.Color.ORANGE.withAlpha(0.4),
           outline: true,
-          // outlineWidth: 20,//设置不了边界宽度
-          outlineColor: Cesium.Color.BLACK,
         },
       });
     }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    if (currentPolygon) viewer.entities.remove(currentPolygon);
+    //清空当前绘制数据
+    currentPolygon = null;
+    currentPositions = [];
+    mousePosition = null;
+    //移除预览线
+    if (previewLineEntity) viewer.entities.remove(previewLineEntity);
+  }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
 });
+
 onUnmounted(() => {
   if (handler) {
     handler.destroy();
